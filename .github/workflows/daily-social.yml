@@ -1,0 +1,84 @@
+name: InboxWarmup Daily Social
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:00 Asia/Kolkata = 03:30 UTC (IST has no DST)
+    - cron: '30 3 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: inboxwarmup-social-daily
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      POSTPONE_API_KEY: ${{ secrets.POSTPONE_API_KEY }}
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+      GROQ_MODEL: openai/gpt-oss-20b
+      AUTO_QUEUE_SOCIAL: 'true'
+      DAILY_GENERATION: 'false'
+      PUBLISH_INSTAGRAM: 'false'
+      PUBLISH_REDDIT_AUTOMATICALLY: 'false'
+      # Optional disambiguation for multiple accounts:
+      POSTPONE_LINKEDIN_USERNAME: ${{ vars.POSTPONE_LINKEDIN_USERNAME }}
+      BUFFER_X_CHANNEL_ID: ${{ vars.BUFFER_X_CHANNEL_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Offline workflow tests
+        run: python -m unittest discover -s tests -v
+      - name: Daily generation and queueing
+        id: run
+        continue-on-error: true
+        run: python cloud_run.py
+      - name: Checkpoint SQLite and persist non-secret history
+        if: always()
+        run: |
+          python - <<'PY_SQL'
+          from pathlib import Path
+          import sqlite3
+          p=Path('data/posts.sqlite3')
+          if p.exists():
+              with sqlite3.connect(p) as conn:
+                  conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+          PY_SQL
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- data/posts.sqlite3
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: social history $(date -u +%Y-%m-%d) [skip ci]"
+            git push
+          fi
+      - name: Upload daily report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: social-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Summarize report file locations
+        if: always()
+        run: |
+          echo '### Reporting' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Open the **social-report** artifact below to download dashboard.html and post-history.csv.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Queued is not live publishing; Reddit is not submitted automatically.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Mark failure when providers failed
+        if: steps.run.outcome == 'failure'
+        run: exit 1

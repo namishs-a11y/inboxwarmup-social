@@ -1,0 +1,21 @@
+# Secrets - NEVER commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+# Local development
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+# SQLite transient journals (database itself is persisted in this private repo)
+data/*-wal
+data/*-shm
+reports/*.csv
+reports/*.json
+# Mac/Windows
+.DS_Store
+Thumbs.db
